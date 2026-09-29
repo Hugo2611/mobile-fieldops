@@ -20,6 +20,11 @@ export function SessionMap({ center, observations, onSelectObservation }: Props)
   const mapRef = useRef<HTMLElement>(null);
   const [map, setMap] = useState<GoogleMap | null>(null);
 
+  const observationsRef = useRef(observations);
+  observationsRef.current = observations;
+  const onSelectObservationRef = useRef(onSelectObservation);
+  onSelectObservationRef.current = onSelectObservation;
+
   // Cree la carte UNE SEULE FOIS au montage (contrairement a une carte web ou
   // on peut se permettre de re-render un composant declaratif a chaque
   // changement de props, ici GoogleMap.create() est couteux : on cree une
@@ -39,7 +44,7 @@ export function SessionMap({ center, observations, onSelectObservation }: Props)
       // HACK on rajoute la correspondance id métier - marker directement sur
       // l'objet technique, sans quoi même un useRef() ne parvient pas à en
       // suivre le cycle de vie :
-      newMap.observationIdToMarkerIdMap = new Map<string, string>();
+      (newMap as any).observationIdToMarkerIdMap = new Map<string, string>();
       setMap(newMap);
      
       // TODO rajouter un marqueur sur la même position pour tester, puis le commenter :
@@ -55,6 +60,23 @@ export function SessionMap({ center, observations, onSelectObservation }: Props)
       // TODO TP BONUS écouter les événements de click sur les markers,
       // et en afficher les informations dans un alert()
       // TODO TP BONUS EXTRA afficher l'observation correspondante à l'aide de onSelectObservation et newMap.observationIdToMarkerIdMap
+      await newMap.setOnMarkerClickListener(async (marker) => {
+        console.log('Marker clicked:', marker);
+        const obsMap = (newMap as any).observationIdToMarkerIdMap as Map<string, string>;
+        let foundObsId: string | undefined;
+        obsMap?.forEach((mId, oId) => {
+          if (mId === marker.markerId) {
+            foundObsId = oId;
+          }
+        });
+        if (foundObsId) {
+          const obs = observationsRef.current.find(o => o.id === foundObsId);
+          if (obs) {
+            alert(`Observation: ${obs.category ?? 'Sans catégorie'}\nNotes: ${obs.notes ?? 'Aucune note'}`);
+            onSelectObservationRef.current(obs);
+          }
+        }
+      });
     }
     createMap();
 
@@ -69,7 +91,15 @@ export function SessionMap({ center, observations, onSelectObservation }: Props)
   // l'instance
   useEffect(() => {
     // TODO TP code de mise à jour du centre de la carte lorsque la propriété center change :
-  }, [/* TODO TP*/]);
+    if (map && center) {
+      map.setCamera({
+        coordinate: {
+          lat: center.lat,
+          lng: center.lng,
+        },
+      });
+    }
+  }, [map, center]);
 
   // Resynchronise les marqueurs quand la liste d'observations change : on
   // retire tous les anciens puis on ajoute les nouveaux. Pas de diff fin
@@ -94,25 +124,30 @@ export function SessionMap({ center, observations, onSelectObservation }: Props)
       /* VERSION COMPLETE : */
       // TODO BONUS (voir plus bas)
       const oIdToBeRemoved: string[] = [];
-      const observationIdToMarkerIdMap = map.observationIdToMarkerIdMap as Map<string, string>;
+      const observationIdToMarkerIdMap = (map as any).observationIdToMarkerIdMap as Map<string, string>;
       observationIdToMarkerIdMap?.forEach((mId, oId) => {
         if (!observations.find(o => o.id === oId)) {
           oIdToBeRemoved.push(oId);
         }
       });
       if (oIdToBeRemoved?.length) {
-        await map.removeMarkers(oIdToBeRemoved);
+        const mIdsToBeRemoved = oIdToBeRemoved.map(oId => observationIdToMarkerIdMap.get(oId)!).filter(Boolean);
+        if (mIdsToBeRemoved.length) {
+          await map.removeMarkers(mIdsToBeRemoved);
+        }
       }
 
       // TODO code d'ajoût des markers des observations (disponibles en propriété du composant React) :
       // (hint : s'aider de geoJSONToLngLat)
-      const toBeAddedObservations = observations.filter(o => !observationIdToMarkerIdMap.get(o.id));
+      const toBeAddedObservations = observations.filter(o => !observationIdToMarkerIdMap?.get(o.id));
       let mIds: string[] = [];
       if (toBeAddedObservations?.length) {
         mIds = await map.addMarkers(toBeAddedObservations.map(o => {
           return {
             // TODO rajouter au moins un champ optionnel de configuration du Marker, voir https://capacitorjs.com/docs/apis/google-maps#marker
             coordinate: geoJSONToLngLat(o.location as GeoJSONPoint),
+            title: o.category || 'Observation',
+            snippet: o.notes || undefined,
           };
         }));
         console.log('markers rajoutés');
@@ -121,17 +156,17 @@ export function SessionMap({ center, observations, onSelectObservation }: Props)
       // TODO BONUS EXTRA se rappeler des ids des markers rajoutés
       // puis s'en servir pour supprimer tous les markers avant d'en rajouter
       // (hint : s'aider de map.observationIdToMarkerIdMap)
-      if (oIdToBeRemoved?.length || toBeAddedObservations?.length) {
+      if (observationIdToMarkerIdMap && (oIdToBeRemoved?.length || toBeAddedObservations?.length)) {
         oIdToBeRemoved.forEach(oId => observationIdToMarkerIdMap.delete(oId));
         toBeAddedObservations.forEach((o, mIdInd) => {
           observationIdToMarkerIdMap.set(o.id, mIds[mIdInd]);
         });
-        map.observationIdToMarkerIdMap = observationIdToMarkerIdMap;
+        (map as any).observationIdToMarkerIdMap = observationIdToMarkerIdMap;
       }
       /**/
     }
     addMarkers();
-  }, [/* TODO */map, observations]);
+  }, [map, observations]);
 
   // style inline plutot qu'une classe externe, car
   // Le web component ne prend sa taille que si on la lui donne explicitement

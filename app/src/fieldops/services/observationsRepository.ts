@@ -27,9 +27,18 @@ export const updateLocalStoreForObservation = async (observation: Observation) =
 export const observationsRepository = {
   
   async fetchBySession(token: string, sessionId: string): Promise<Observation[]> {
-    // TODO TD implémenter au-dessus d'observationsApi
-    return await observationsApi.fetchBySession(token, sessionId);
-    // TODO lorsqu'elles réussissent, rafraichir (ou mettre à jour partiellement) un cache local des objets à l'aide de (app/)src/shared/services/localStore.tsx
+    try {
+      const observations = await observationsApi.fetchBySession(token, sessionId);
+      const localObservations = await getLocalObservations();
+      const localChangedObservations = localObservations.filter(lo => lo.sync_status !== 'SYNCED');
+      const observationsWithoutLocalChanges = observations.filter(o => !localChangedObservations.find(lo => lo.id == o.id));
+      await preferencesLocalStore.set(OBSERVATIONS_KEY, [...localChangedObservations, ...observationsWithoutLocalChanges]);
+      return observations;
+    } catch (e) {
+      console.log('observationsRepository fetchBySession network error, returning cache', e);
+      const localObservations = await getLocalObservations();
+      return localObservations.filter(o => o.session_id === sessionId);
+    }
   },
 
   async fetchNearby(
@@ -82,10 +91,63 @@ export const observationsRepository = {
   async create(
     token: string,
     sessionId: string,
-    input: ObservationInput & { user_id: string }
+    input: ObservationInput & { user_id: string; id?: string }
   ): Promise<Observation> {
     // TODO BONUS EXTRA offline create modification en s'inspirant de l'update
-    return await observationsApi.create(token, sessionId, input);
+    const localObservations = await getLocalObservations();
+    try {
+      const observation = await observationsApi.create(token, sessionId, input);
+      await updateLocalStoreForObservation(observation);
+      return observation;
+    } catch (e) {
+      const err = (e instanceof Error) ? e as Error : null;
+      const isNetworkError = err?.name === 'TimeoutError' || (e as any)?.message?.includes('reseau') || (e as any)?.message?.includes('fetch') || (typeof navigator !== 'undefined' && !navigator.onLine);
+      if (isNetworkError) {
+        console.log('observationsRepository create network error, updating cache and adding outbox operation', e);
+        const nowISO601 = new Date().toISOString();
+        const clientGeneratedId = input.id || crypto.randomUUID();
+        const createdObservation: Observation = {
+          id: clientGeneratedId,
+          session_id: sessionId,
+          user_id: input.user_id,
+          created_at: nowISO601,
+          updated_at: nowISO601,
+          status: 'created',
+          status_changed_at: nowISO601,
+          sync_status: 'PENDING', // TRES IMPORTANT pour l'offline !
+          category: input.category,
+          location: input.location,
+          nombre: input.nombre ?? 1,
+          poids_g: input.poids_g ?? null,
+          notes: input.notes ?? null,
+          photos: (input.photos || []).map((p, idx) => ({
+            id: (p as any).id || `${clientGeneratedId}_photo_${idx}`,
+            created_at: nowISO601,
+            updated_at: nowISO601,
+            observation_id: clientGeneratedId,
+            data: p.data,
+            mime_type: p.mime_type,
+          })),
+        };
+        localObservations.push(createdObservation);
+
+        const payload = { ...createdObservation };
+        delete (payload as any).user;
+        delete (payload as any).photos;
+        await outbox.enqueue({
+          entity: 'observation',
+          entityId: createdObservation.id,
+          sessionId: createdObservation.session_id,
+          operationType: 'create',
+          payload,
+        });
+
+        await preferencesLocalStore.set(OBSERVATIONS_KEY, localObservations);
+        return createdObservation;
+      }
+      console.log('observationsRepository create unknown error, rethrowing', e);
+      throw e;
+    }
   },
 
   async update(

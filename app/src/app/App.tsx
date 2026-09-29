@@ -4,11 +4,11 @@ import { IonReactRouter } from '@ionic/react-router';
 import { Route, useLocation, useNavigate } from 'react-router-dom';
 
 import { AuthProvider } from '../auth/context/AuthContext';
-import { CurrentSessionProvider } from '../fieldops/context/CurrentSessionContext';
+import { CurrentSessionProvider, useCurrentSession } from '../fieldops/context/CurrentSessionContext';
 import { RequireAuth } from '../auth/guards/RequireAuth';
 import { RequireGuest } from '../auth/guards/RequireGuest';
 import { AppBootstrap } from './AppBootstrap';
-import { ROUTE_PATTERNS } from './routes';
+import { ROUTES, ROUTE_PATTERNS } from './routes';
 import { SideMenu } from '../shared/components/SideMenu';
 
 import LoginEmailPage from '../auth/pages/LoginEmailPage';
@@ -37,6 +37,7 @@ setupIonicReact();
 const RouterRootChild = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { currentSession } = useCurrentSession();
   
   useEffect(() => {
     console.log('Route changed to:', location.pathname);
@@ -67,18 +68,19 @@ const RouterRootChild = () => {
         } else {
           // TODO Rajouter le partage aussi de texte depuis WhatsApp ou autre application de messagerie, et le mettre dans Observation.notes
           const observation = {
-            notes: data.extraText,
+            notes: data.extraText || '',
             photos: [{
               id: '0',
               data: res.data as unknown as string,
               mime_type: data.mimeType,
             }]
           };
-          navigate(ROUTE_PATTERNS.observationNew, { state: { observation } });
+          const targetSessionId = currentSession?.id || 'default';
+          navigate(ROUTES.observationNew(targetSessionId), { state: { observation } });
         }
       }
     );
-  }, [navigate]);
+  }, [navigate, currentSession]);
   
   return (
     <IonSplitPane contentId="main">

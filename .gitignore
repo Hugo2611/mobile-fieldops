@@ -14,5 +14,7 @@ certs/*
 */node_modules/*
 logs/*
 *.jar
+!**/gradle/wrapper/*.jar
 .project
 .vscode
+.idea/

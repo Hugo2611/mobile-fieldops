@@ -23,13 +23,11 @@ export function useDataService() {
   const { token, user } = useAuth();
 
   return useMemo(() => {
-    /*
     if (!token || !user) {
       throw new Error(
         'useDataService necessite un utilisateur connecte (a utiliser derriere RequireAuth)'
       );
     }
-    */
 
     return {
       
@@ -52,7 +50,7 @@ export function useDataService() {
           observationsRepository.fetchOne(token, sessionId, obsId),
         create: (sessionId: string, input: ObservationInput) =>
           // TODO BONUS EXTRA offline create modification en s'inspirant de l'update
-          observationsApi.create(token, sessionId, { ...input, user_id: user.id }),
+          observationsRepository.create(token, sessionId, { ...input, user_id: user.id }),
         update: (sessionId: string, obsId: string, input: ObservationInput) =>
           observationsRepository.update(token, sessionId, obsId, input),
         delete: (sessionId: string, obsId: string) =>
@@ -93,7 +91,43 @@ export function useDataService() {
 
             } else if (op.operationType === 'create') {
               // TODO BONUS EXTRA offline create modification en s'inspirant de l'update
-              
+              try {
+                const resObservation = await observationsApi.create(token, obs.session_id, {
+                  category: obs.category,
+                  location: obs.location,
+                  nombre: obs.nombre,
+                  poids_g: obs.poids_g,
+                  notes: obs.notes,
+                  photos: obs.photos?.map(p => ({ data: p.data, mime_type: p.mime_type })),
+                  user_id: user.id,
+                  ...(obs.id ? { id: obs.id } : {}),
+                } as any);
+                await outbox.remove(op.id);
+                await updateLocalStoreForObservation(resObservation);
+              } catch (e) {
+                const err = (e instanceof Error) ? e as Error : null;
+                const isNetworkError = err?.name === 'TimeoutError' || (e as any)?.message?.includes('reseau') || (e as any)?.message?.includes('fetch') || (typeof navigator !== 'undefined' && !navigator.onLine);
+                console.log('DataService syncAll create error', JSON.stringify(op, null, 2), e);
+                if (isNetworkError) {
+                  outbox.markFailed(op.id, JSON.stringify(e, null, 2));
+                  failedIds.push(obs.id);
+                } else {
+                  // erreur métier pas résolvable immédiatement, on change l'opération dans l'outbox ;
+                  obs.sync_status = 'ERROR';
+                  const payload = { ...obs };
+                  delete (payload as any).user;
+                  delete (payload as any).photos;
+                  await outbox.enqueue({
+                    entity: 'observation',
+                    entityId: obs.id,
+                    sessionId: obs.session_id,
+                    operationType: 'create',
+                    payload,
+                  });
+                  await outbox.remove(op.id);
+                }
+              }
+
             } else if (op.operationType === 'update') {
               try {
                 const resObservation = await observationsApi.update(token, obs.session_id, obs.id, obs);
@@ -101,17 +135,17 @@ export function useDataService() {
                 await updateLocalStoreForObservation(resObservation);
               } catch (e) {
                 const err = (e instanceof Error) ? e as Error : null;
-                const isNetworkError = err?.name === 'TimeoutError';
+                const isNetworkError = err?.name === 'TimeoutError' || (e as any)?.message?.includes('reseau') || (e as any)?.message?.includes('fetch') || (typeof navigator !== 'undefined' && !navigator.onLine);
                 console.log('DataService syncAll error', JSON.stringify(op, null, 2), e);
                 if (isNetworkError) {
                   outbox.markFailed(op.id, JSON.stringify(e, null, 2));
-                  
+                  failedIds.push(obs.id);
                 } else {
                   // erreur métier pas résolvable immédiatement, on change l'opération dans l'outbox ;
                   obs.sync_status = 'ERROR';
                   const payload = { ...obs };
-                  delete obs.user;
-                  delete obs.photos;
+                  delete (payload as any).user;
+                  delete (payload as any).photos;
                   await outbox.enqueue({
                     entity: 'observation',
                     entityId: obs.id, // id (définitif, généré côté client) de l'entité concernée

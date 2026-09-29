@@ -38,7 +38,7 @@ class AndroidShareTargetHandler : Plugin() {
 
     fun handleSendImage(intent: Intent) {
         (IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java) as? Uri).let { uri ->
-            val extraText = intent.getCharSequenceExtra(Intent.EXTRA_TEXT) // que faire de la partie texte ?
+            val extraText = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString() // que faire de la partie texte ?
 
             val cr = context.contentResolver
             val mimeType = if (uri != null) cr.getType(uri) else null;
